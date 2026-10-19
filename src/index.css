@@ -1,0 +1,145 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Orbitron:wght@400;500;600;700&family=Russo+One&family=Chakra+Petch:wght@400;500;600&family=Rajdhani:wght@400;500;600&family=Share+Tech+Mono&family=Barlow+Condensed:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter Tight', -apple-system, 'Segoe UI', system-ui, sans-serif;
+  background: #14110f;
+  color: #e0e0e0;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Electron drag region for custom title bar */
+.drag-region {
+  -webkit-app-region: drag;
+}
+.drag-region button,
+.drag-region input {
+  -webkit-app-region: no-drag;
+}
+
+/* Scrollbars — completely hidden, scroll still works */
+::-webkit-scrollbar {
+  width: 0px;
+  height: 0px;
+  display: none;
+}
+* {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+}
+
+/* Konva canvas: pixel-perfect rendering when zoomed in */
+.konvajs-content canvas {
+  image-rendering: auto;
+}
+
+/* Workspace transitions */
+.workspace-enter {
+  opacity: 0;
+  transform: scale(0.99);
+}
+.workspace-enter-active {
+  opacity: 1;
+  transform: scale(1);
+  transition: opacity 150ms ease-out, transform 150ms ease-out;
+}
+.workspace-exit {
+  opacity: 1;
+}
+.workspace-exit-active {
+  opacity: 0;
+  transition: opacity 100ms ease-in;
+}
+
+/* Resizable divider */
+.panel-divider {
+  background: #2a2724;
+  transition: background 0.1s;
+  flex-shrink: 0;
+}
+.panel-divider:hover,
+.panel-divider.dragging {
+  background: #ffaa33;
+}
+.panel-divider-h {
+  width: 4px;
+  cursor: col-resize;
+}
+.panel-divider-v {
+  height: 4px;
+  cursor: row-resize;
+}
+
+/* Command palette backdrop */
+.cmd-palette-backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+/* Context menu shadow */
+.context-menu-shadow {
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Canvas noise texture overlay */
+.canvas-noise {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.05'/%3E%3C/svg%3E");
+}
+
+/* Custom range slider styling */
+input[type="range"] {
+  -webkit-appearance: none;
+  height: 4px;
+  border-radius: 2px;
+  background: #2a2724;
+  outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ffaa33;
+  border: 2px solid #1a1816;
+  cursor: pointer;
+  transition: box-shadow 0.15s ease;
+}
+input[type="range"]::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 0 3px rgba(255, 170, 51, 0.2);
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: #2a2724;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #ffaa33;
+  border: 2px solid #1a1816;
+  cursor: pointer;
+}
+
+/* Command palette animation */
+@keyframes cmdPaletteIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+

@@ -1,0 +1,29 @@
+{
+  "phases": {
+    "phase_0": {
+      "name": "Project Bootstrap",
+      "tests": [
+        {
+          "id": "P0-01",
+          "description": "Electron window opens with 'SynthSkin Studio' title",
+          "status": "pending"
+        },
+        {
+          "id": "P0-02",
+          "description": "Python sidecar starts and responds to /health",
+          "status": "pending"
+        },
+        {
+          "id": "P0-03",
+          "description": "Status bar shows green 'Python :PORT' indicator",
+          "status": "pending"
+        },
+        {
+          "id": "P0-04",
+          "description": "App closes gracefully (Python sidecar terminates)",
+          "status": "pending"
+        }
+      ]
+    }
+  }
+}

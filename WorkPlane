@@ -1,0 +1,1606 @@
+מצוין - אלטרנטיבה B זו הבחירה הנכונה. 6 milestones עם נקודות החלטה אמיתיות בין כל אחד. הנה הפרומפט המלא:
+
+---
+
+# 🎛️ SynthSkin Studio - Competitive Feature Roadmap
+
+## Document Purpose
+
+This is a **6-milestone roadmap** for evolving SynthSkin Studio from its current state into a tool that competes seriously with PluginGuiMagic, HISE's UI editor, VST GUI Pro (Figma), and Real Grooves Audio kits.
+
+**Critical instruction**: This roadmap is designed with **mandatory checkpoints between milestones**. After each milestone is complete, work stops. The user reviews progress, evaluates what's actually useful in practice, and makes an explicit decision whether to proceed to the next milestone, change direction, or pause development entirely. Do not chain milestones together.
+
+**Assumed baseline**: Core SynthSkin Studio exists with extraction tools, foundry, lighting system, panel designer, animation, JUCE export, and the workspace-based UX from the prior overhaul. If any of these are missing, stop and ask before proceeding.
+
+---
+
+## Prime Directives
+
+Read these before every work session.
+
+<investigate_before_answering>
+Never speculate about code you haven't opened. Before implementing any feature, read the existing files related to that area. If you are unsure how the existing system works, ask rather than guess.
+</investigate_before_answering>
+
+<respect_the_milestones>
+This roadmap has 6 milestones. Each ends with a **mandatory stop point**. Do not proceed to the next milestone without explicit user approval. After completing a milestone, write a detailed completion report and wait. The user may decide to skip a milestone, reorder them, or stop entirely - this is expected and encouraged.
+</respect_the_milestones>
+
+<incremental_progress>
+Within each milestone, work in small commits. One feature per commit. Update progress files after every commit. Never leave the codebase broken between commits.
+</incremental_progress>
+
+<preserve_existing_functionality>
+Every existing feature must continue working after each change. This roadmap adds capabilities, it does not rewrite existing ones. If implementing a new feature requires modifying existing code, do so carefully and verify nothing broke.
+</preserve_existing_functionality>
+
+<state_tracking>
+Maintain throughout the project:
+- `roadmap-progress.md` - current milestone, completed features, blockers
+- `decisions.md` - architectural decisions with rationale
+- `tests.json` - test results per feature
+- `competitive-notes.md` - observations about how features compare to PluginGuiMagic, HISE, etc.
+</state_tracking>
+
+<honest_reporting>
+At the end of each milestone, write an honest completion report including: what works well, what works poorly, what was harder than expected, what should be reconsidered for the next milestone, and which features turned out to be unnecessary. Do not gloss over problems.
+</honest_reporting>
+
+---
+
+## Milestone Overview
+
+| # | Milestone | Estimated Effort | Strategic Goal |
+|---|-----------|------------------|----------------|
+| 1 | **Live JUCE Bridge** | 3-4 weeks | Match PluginGuiMagic's killer feature |
+| 2 | **Stylesheet System** | 2-3 weeks | Match competitive UX of CSS-style theming |
+| 3 | **Animation Sandbox & Brand System** | 3-4 weeks | Two unique differentiators |
+| 4 | **Complete Project Generator** | 4-5 weeks | Move from "GUI tool" to "plugin development environment" |
+| 5 | **Visual Quality Upgrade** | 3-4 weeks | Match Arturia/u-he visual quality |
+| 6 | **Distribution & Marketplace** | 4-6 weeks | Long-term business model foundation |
+
+**Total estimated effort**: 19-26 weeks of focused work. Realistically 6-9 months calendar time when working part-time alongside other projects.
+
+After each milestone there is a mandatory stop. Total milestones to actually complete is the user's decision based on practical experience using the tool.
+
+---
+
+# MILESTONE 1: Live JUCE Bridge
+
+**Strategic goal**: Match the single most important feature of PluginGuiMagic - the ability to edit a plugin's GUI live while the plugin is running in a DAW, without recompilation. This is the feature that will make professional JUCE developers consider switching to SynthSkin Studio.
+
+**Why this is first**: Without this, SynthSkin Studio is "a design tool that exports to JUCE." With this, it becomes "a JUCE development environment with a design tool." This is the difference between a niche utility and a professional standard.
+
+## 1.1 Architecture: The Bridge Module
+
+Create a new C++ JUCE module that gets added to user plugin projects:
+
+```
+synthskin-bridge/
+├── CMakeLists.txt
+├── synthskin_bridge.h
+├── synthskin_bridge.cpp
+└── src/
+    ├── BridgeServer.h           # TCP server inside the plugin
+    ├── BridgeServer.cpp
+    ├── DesignLoader.h           # Loads design XML at runtime
+    ├── DesignLoader.cpp
+    ├── ComponentRegistry.h      # Maps component IDs to JUCE components
+    ├── ComponentRegistry.cpp
+    ├── LiveSync.h               # Real-time updates from SynthSkin
+    ├── LiveSync.cpp
+    └── ParameterBridge.h        # Connects components to APVTS
+        ParameterBridge.cpp
+```
+
+**How it works**:
+1. User adds the `synthskin-bridge` module to their JUCE project (one line in CMakeLists.txt)
+2. In their `PluginEditor` constructor, they instantiate `SynthSkinBridge bridge(*this, processor)`
+3. When the plugin loads in a DAW, the bridge starts a TCP server on a configurable port (default 9876)
+4. SynthSkin Studio detects the running plugin and connects to it
+5. The user designs in SynthSkin Studio - changes are sent over TCP to the running plugin
+6. The plugin re-renders in the DAW immediately, no recompilation
+7. When the user is satisfied, they "bake" the design - it gets exported as XML and embedded as BinaryData
+8. For the release build, the user defines `SYNTHSKIN_BRIDGE_DISABLED=1` and the entire bridge code is excluded
+
+**Critical design constraint**: The bridge module must add **zero overhead** to release builds. All bridge code must be wrapped in `#if SYNTHSKIN_BRIDGE_ENABLED` and the macro must be off by default. Only debug/development builds get the bridge.
+
+## 1.2 The Wire Protocol
+
+Define a JSON-based protocol for communication between SynthSkin Studio and the plugin:
+
+```typescript
+// Messages from SynthSkin Studio → Plugin
+type StudioMessage =
+  | { type: 'load_design'; xml: string }
+  | { type: 'update_component'; componentId: string; properties: object }
+  | { type: 'add_component'; componentId: string; type: string; properties: object; parentId: string }
+  | { type: 'remove_component'; componentId: string }
+  | { type: 'reorder_components'; parentId: string; orderedIds: string[] }
+  | { type: 'update_lighting'; lighting: LightingConfig }
+  | { type: 'update_background'; background: BackgroundConfig }
+  | { type: 'request_screenshot' }
+  | { type: 'request_parameter_list' }
+  | { type: 'set_parameter'; parameterId: string; value: number };
+
+// Messages from Plugin → SynthSkin Studio
+type PluginMessage =
+  | { type: 'connected'; pluginName: string; jucePluginVersion: string; bridgeVersion: string }
+  | { type: 'parameter_list'; parameters: ParameterInfo[] }
+  | { type: 'parameter_changed'; parameterId: string; value: number; source: 'user' | 'host' | 'studio' }
+  | { type: 'screenshot'; pngBase64: string }
+  | { type: 'error'; code: string; message: string }
+  | { type: 'design_loaded'; success: boolean; warnings: string[] };
+```
+
+Use length-prefixed framing (4-byte length header + JSON body) over a raw TCP socket. No HTTP overhead, no WebSocket complexity. Just speed.
+
+## 1.3 The Design XML Format
+
+Define a stable XML schema that represents a complete plugin design. This is the format that gets baked into the plugin's BinaryData for release builds.
+
+```xml
+<synthskin-design version="1.0">
+  <metadata>
+    <name>My Synth Plugin</name>
+    <author>David Cohen</author>
+    <created>2026-04-09</created>
+  </metadata>
+  
+  <stylesheet>
+    <!-- Reserved for Milestone 2 -->
+  </stylesheet>
+  
+  <lighting>
+    <key azimuth="135" elevation="45" intensity="1.0" color="#fff5e6" softness="0.7"/>
+    <fill intensity="0.3" color="#3a4055"/>
+    <ambient intensity="0.2" color="#2a2825"/>
+    <environment preset="studio"/>
+  </lighting>
+  
+  <panel width="800" height="500" backgroundType="brushedAluminum" backgroundColor="#3a3a3a">
+    <section id="osc1" name="Oscillator 1" x="20" y="20" width="240" height="180" 
+             borderStyle="engraved" titleStyle="silkscreen">
+      
+      <component id="osc1_pitch" type="knob" 
+                 preset="moog-chicken-head"
+                 x="40" y="60" diameter="48"
+                 material="brushedAluminum" 
+                 indicatorColor="#ffaa33"
+                 parameterId="osc1Pitch"/>
+      
+      <component id="osc1_wave" type="rotarySwitch"
+                 x="120" y="60" diameter="48"
+                 positions="4"
+                 labels="SAW,SQR,TRI,SIN"
+                 parameterId="osc1Wave"/>
+      
+      <label text="PITCH" x="40" y="120" font="Eurostile" size="11" 
+             effect="engraved" forFor="osc1_pitch"/>
+      
+      <label text="WAVE" x="120" y="120" font="Eurostile" size="11"
+             effect="engraved" forFor="osc1_wave"/>
+    </section>
+    
+    <!-- More sections... -->
+  </panel>
+  
+  <bindings>
+    <binding componentId="osc1_pitch" parameterId="osc1Pitch" 
+             min="-24" max="24" default="0" units="semi" skew="1.0"/>
+    <!-- More bindings... -->
+  </bindings>
+</synthskin-design>
+```
+
+**Schema requirements**:
+- Forward-compatible: future versions can add elements without breaking older parsers
+- Human-readable: developers can edit it in a text editor if needed
+- Version-controlled friendly: clean line breaks, stable attribute order
+- Validates against an XSD schema (write the schema as part of this milestone)
+
+## 1.4 Component Registry in C++
+
+The bridge needs to know how to instantiate any component that SynthSkin Studio can produce. Build a registry:
+
+```cpp
+class ComponentRegistry {
+public:
+    using ComponentFactory = std::function<std::unique_ptr<juce::Component>(const ComponentSpec&)>;
+    
+    void registerType(const juce::String& typeName, ComponentFactory factory);
+    std::unique_ptr<juce::Component> create(const juce::String& typeName, const ComponentSpec& spec);
+    
+    juce::StringArray getRegisteredTypes() const;
+};
+```
+
+Required built-in component types for this milestone:
+- `knob` (with all material/preset variants)
+- `slider` (linear, vertical, horizontal)
+- `rotarySwitch` (stepped selector)
+- `button` (momentary, toggle)
+- `led` (round, rectangular, with animations)
+- `meter` (VU, peak, RMS)
+- `display` (LCD/OLED placeholder)
+- `label` (with text effects)
+- `section` (group container)
+- `image` (custom imported asset)
+
+Each type knows how to:
+1. Construct itself from a `ComponentSpec` (the parsed XML)
+2. Apply property updates at runtime (when SynthSkin sends `update_component`)
+3. Bind to APVTS parameters
+4. Render itself with current lighting/material settings
+
+## 1.5 SynthSkin Studio Side: Connection Manager
+
+In the Studio app, add a new panel/workspace area for managing live JUCE connections:
+
+**Connection Panel UI**:
+- Status indicator: Disconnected / Searching / Connected / Error
+- "Scan for plugins" button - actively probes localhost ports 9876-9886
+- List of detected plugins with: name, version, port, "Connect" button
+- For connected plugin: name, status, last sync time, "Disconnect" button
+- Error log with timestamps
+
+**Connection logic**:
+- On connect, immediately send the current design state to the plugin
+- Subsequent design changes are sent as incremental updates (not full reloads)
+- Heartbeat every 2 seconds to detect disconnection
+- Auto-reconnect attempts with exponential backoff
+- Visual indicator in the main canvas when connected (small "LIVE" badge)
+
+## 1.6 Live Sync Behavior
+
+When connected, every design change in SynthSkin Studio must propagate to the plugin within 100ms:
+
+- Component property changes: send `update_component` with only the changed properties
+- Component additions/deletions: send corresponding messages
+- Lighting changes: send `update_lighting` (the bridge re-renders all components)
+- Background changes: send `update_background`
+
+**Conflict handling**: If the user changes a parameter value in the DAW while connected, the plugin sends `parameter_changed` to the Studio. The Studio updates its internal state but does NOT echo back (to avoid loops).
+
+**Performance requirement**: Live sync must remain smooth even when the user rapidly drags a property slider in the Studio. Use throttling: collect updates within a 16ms window and send them as a batch.
+
+## 1.7 The "Bake" Operation
+
+When the user is happy with the design, they need to convert it from "live mode" to "production mode":
+
+- "Bake to BinaryData" button in the Export workspace
+- Generates the final design XML
+- Generates BinaryData wrapper code that embeds the XML and all asset files
+- Generates a small loader function the user adds to their `PluginEditor` constructor:
+
+```cpp
+// In PluginEditor constructor (release build):
+#if !SYNTHSKIN_BRIDGE_ENABLED
+    SynthSkinDesignLoader::loadFromBinaryData(
+        *this, processor,
+        BinaryData::design_xml,
+        BinaryData::design_xmlSize
+    );
+#else
+    bridge.startLiveMode(*this, processor);
+#endif
+```
+
+The release build never runs the bridge code at all - it loads the static design from BinaryData and creates components directly. This is critical for performance and security.
+
+## 1.8 Documentation & Examples
+
+Create example projects demonstrating the bridge:
+
+```
+examples/
+├── 01-minimal-synth/         # Simplest possible plugin with bridge
+│   ├── CMakeLists.txt
+│   ├── Source/
+│   └── README.md
+├── 02-multi-section-fx/      # FX plugin with multiple sections
+└── 03-vintage-synth/         # Full synth with complex GUI
+```
+
+Each example should:
+- Build out of the box
+- Include a SynthSkin project file
+- Have a tutorial walkthrough in the README
+- Demonstrate at least one unique feature
+
+## 1.9 Testing Protocol for Milestone 1
+
+Manual integration test that must pass before completing this milestone:
+
+1. Create a new JUCE plugin project with the bridge module added
+2. Build and load in REAPER (or any DAW)
+3. Open SynthSkin Studio - it should detect the plugin
+4. Connect to the plugin
+5. Drag a knob from the library onto the canvas - it appears in the plugin within 1 second
+6. Change the knob's material - the change appears in the plugin
+7. Bind the knob to a parameter - move the knob in the DAW, see the value update
+8. Disconnect, reconnect - state is preserved
+9. Bake the design, define `SYNTHSKIN_BRIDGE_DISABLED=1`, rebuild - plugin still looks identical but now without the bridge
+10. Verify release build has zero TCP code in the binary (use `nm` or similar to check)
+
+## 1.10 Milestone 1 Completion Report
+
+Write a report covering:
+- Did live sync feel responsive enough in practice?
+- Were there reliability issues with the TCP connection?
+- How does the developer experience compare to PluginGuiMagic?
+- What workflows worked surprisingly well?
+- What workflows were frustrating?
+- Recommendation: Should we proceed to Milestone 2, or revise Milestone 1?
+
+**🛑 STOP HERE. Wait for user decision before proceeding.**
+
+---
+
+# MILESTONE 2: Stylesheet System
+
+**Strategic goal**: Add CSS-style theming so users can design large plugins with consistent appearance, and so changing one style updates dozens of components automatically.
+
+**Why this is second**: After living with the live JUCE bridge, the natural next pain point is "I have 40 knobs and they all look slightly different - I want one place to control them." This is exactly what CSS solves for web developers, and it's what PluginGuiMagic provides for JUCE.
+
+## 2.1 The Stylesheet Format
+
+Define a CSS-inspired format that lives inside the design XML:
+
+```xml
+<stylesheet>
+  <variables>
+    <var name="accent" value="#ffaa33"/>
+    <var name="panel-bg" value="#2a2825"/>
+    <var name="knob-size-large" value="64"/>
+    <var name="knob-size-medium" value="48"/>
+    <var name="knob-size-small" value="32"/>
+    <var name="font-label" value="Eurostile"/>
+    <var name="font-numeric" value="JetBrains Mono"/>
+  </variables>
+  
+  <style class="osc-knob">
+    <property name="diameter" value="$knob-size-large"/>
+    <property name="material" value="brushedAluminum"/>
+    <property name="indicatorColor" value="$accent"/>
+    <property name="indicatorWidth" value="3"/>
+    <property name="rotationRange" value="-135,135"/>
+  </style>
+  
+  <style class="osc-knob:hover">
+    <property name="indicatorBrightness" value="1.5"/>
+  </style>
+  
+  <style class="filter-knob">
+    <property name="diameter" value="$knob-size-large"/>
+    <property name="material" value="anodizedBlack"/>
+    <property name="indicatorColor" value="#66ccff"/>
+  </style>
+  
+  <style id="#master-volume">
+    <!-- Specific override for one component -->
+    <property name="diameter" value="80"/>
+  </style>
+  
+  <style tag="label">
+    <!-- Applies to all label elements -->
+    <property name="font" value="$font-label"/>
+    <property name="size" value="11"/>
+    <property name="effect" value="engraved"/>
+    <property name="color" value="#888"/>
+  </style>
+</stylesheet>
+```
+
+**Selectors supported**:
+- `class="..."` - matches components with that class
+- `id="#..."` - matches a specific component
+- `tag="..."` - matches all components of a type
+- `:hover`, `:active`, `:disabled` - state-based variants
+- Combinator: `class="osc-knob filter-knob"` - applies both
+
+**Inheritance**:
+- Components inherit from sections
+- Sections inherit from panel
+- Variables cascade down the hierarchy
+- Local properties override class properties override variable defaults
+
+## 2.2 Style Editor in Studio
+
+New panel in the Design workspace: "Stylesheet"
+
+**UI layout**:
+- Top: variable list with name/value editors
+- Middle: class definitions in a tree view (collapsible)
+- Bottom: live preview of the selected class on a sample component
+
+**Features**:
+- Click any component in the canvas to see what classes/styles apply to it
+- Highlight the source of each property (variable, class, local override)
+- "Add class" button - prompt for name, opens editor
+- Drag components to apply classes (drop on a class name)
+- Right-click → "Extract style" - takes a component's local properties and creates a class from them
+- Right-click → "Apply class to similar" - finds all components with similar properties and assigns them the same class
+
+**Live preview**: As the user edits a class, every component using that class updates in real-time, both in the Studio canvas and in the connected JUCE plugin.
+
+## 2.3 Bridge Updates for Stylesheets
+
+The C++ bridge needs to understand stylesheets:
+
+- New message type: `update_stylesheet` carries the full stylesheet
+- The bridge re-applies styles to all matching components
+- The bridge tracks which properties came from styles vs local overrides
+- When a style changes, only style-derived properties get updated (local overrides preserved)
+
+**StyleResolver class**:
+```cpp
+class StyleResolver {
+public:
+    void loadStylesheet(const Stylesheet& sheet);
+    
+    // Compute final properties for a component, applying all matching styles
+    PropertySet resolve(const ComponentSpec& component) const;
+    
+    // Get just the style-derived properties (excluding local overrides)
+    PropertySet resolveStyleOnly(const ComponentSpec& component) const;
+};
+```
+
+## 2.4 Theme Variants
+
+Once stylesheets exist, theme variants become trivial. Add UI for managing themes:
+
+- A plugin can have multiple themes (Dark, Light, Vintage, etc.)
+- Each theme is a stylesheet with the same class names but different values
+- User picks a default theme
+- "Theme switcher" UI in the Studio for previewing
+- Generated JUCE code includes theme switching support
+- End users of the plugin can switch themes at runtime via a menu
+
+**Auto-variant generation**:
+- "Generate light variant from dark" - AI inverts the colors intelligently
+- "Generate vintage variant" - applies aged/warm color shifts
+- Result is a starting point the user can refine
+
+## 2.5 Style Inspector
+
+When debugging why a component looks the way it does, the user needs visibility:
+
+- Right-click any component → "Inspect Styles"
+- Opens a panel showing all applied styles, in order of precedence
+- Each property shows its source (variable, class, local, default)
+- Click a source to jump to its definition
+- Like the Chrome DevTools inspector, but for plugin GUIs
+
+## 2.6 Migration Path
+
+Existing designs (from Milestone 1) need to keep working:
+
+- Old designs without stylesheets continue working unchanged
+- Migration tool: "Extract styles from existing design"
+- It analyzes all components, finds groups with similar properties
+- Suggests classes to create
+- User reviews and approves before applying
+
+## 2.7 Testing Protocol for Milestone 2
+
+1. Open an existing design from Milestone 1
+2. Run "Extract styles" - get suggested classes
+3. Apply suggestions, verify nothing visually changed
+4. Modify a class variable - see all matching components update
+5. Create a light theme variant - verify it generates sensibly
+6. Switch between themes in live JUCE preview
+7. Bake the design with stylesheet - verify the released plugin loads correctly
+8. Edit the design XML in a text editor to add a new variable - reload, verify it works
+
+## 2.8 Milestone 2 Completion Report
+
+Write a report covering:
+- Did stylesheets actually reduce friction in real use?
+- How well did the migration tool work on existing designs?
+- Any conflicts or surprising behaviors with the cascade?
+- Comparison with PluginGuiMagic's CSS support
+- Recommendation for Milestone 3
+
+**🛑 STOP HERE. Wait for user decision before proceeding.**
+
+---
+
+# MILESTONE 3: Animation Sandbox & Brand System
+
+**Strategic goal**: Two unique features that no competitor offers - an interactive sandbox to test animations before exporting, and a brand consistency system for developers building plugin families.
+
+**Why these together**: Both are about confidence and consistency. The Sandbox lets you trust your animations before committing them. The Brand System lets you trust that your visual identity will stay consistent across plugins.
+
+## 3.1 Animation Sandbox - The Concept
+
+A new workspace (or major panel within Animate workspace) called "Sandbox" that simulates a running plugin without requiring a DAW.
+
+**What it does**:
+- Loads the current design as if it were a real plugin
+- Components are fully interactive: drag knobs, click buttons, watch meters
+- Multiple test signal sources: sine sweeps, white noise, audio file playback, manual MIDI
+- Real-time visualization of parameter values
+- Can record interactions as GIF or MP4 for documentation
+
+## 3.2 Sandbox Architecture
+
+```
+src/sandbox/
+├── SandboxRuntime.ts       # Simulates a plugin runtime
+├── ParameterEngine.ts      # Tracks and animates parameter values
+├── SignalGenerator.ts      # Test signal sources
+├── AudioAnalyzer.ts        # Computes meter values from signals
+├── MidiSimulator.ts        # Simulates MIDI input
+├── InteractionRecorder.ts  # Records user interactions
+└── components/
+    ├── SandboxCanvas.tsx   # Renders the design interactively
+    ├── SignalPanel.tsx     # Source selection + transport
+    ├── ParameterMonitor.tsx # Live parameter values display
+    └── RecordingControls.tsx
+```
+
+## 3.3 Test Signal Sources
+
+The sandbox needs realistic test signals to drive meters and visualizations:
+
+**Built-in generators**:
+- Sine sweep (configurable frequency range, duration)
+- White noise / pink noise / brown noise
+- Pulse train (configurable frequency, width)
+- Burst (short attack, decay - tests meter ballistics)
+- Chirp (frequency rising over time)
+- Dual sine (for stereo)
+- Silence (for testing meter rest state)
+
+**Audio file playback**:
+- Drag-and-drop WAV/MP3
+- Loop / one-shot modes
+- Pre/post gain
+- Bypass and solo
+
+**MIDI input simulator**:
+- On-screen keyboard
+- MIDI file playback
+- Recording from connected MIDI device (if Web MIDI available)
+- Note generation patterns (scales, arpeggios)
+
+## 3.4 Realistic Meter Behavior in Sandbox
+
+Meters in the sandbox must behave EXACTLY as they will in the real plugin:
+
+- Use the same ballistics code that will be exported to JUCE
+- Run the test signal through a JS implementation of the same DSP
+- For VU meters: 300ms attack/decay (IEC 60268-17)
+- For PPM: fast attack, slow decay per BBC/EBU spec
+- For digital peak: instant attack, configurable hold/release
+- For LUFS: full ITU-R BS.1770 implementation
+
+This is critical: if the sandbox shows different behavior than the real plugin, it's worse than useless.
+
+## 3.5 Knob Physics in Sandbox
+
+Same principle for knobs:
+- Use the same physics implementation that gets exported to JUCE
+- Mouse drag mirrors what users will experience
+- Inertia, detents, fine control - all working
+- Visual feedback exactly matches the live plugin behavior
+
+## 3.6 Recording & Export
+
+Convert interactions into shareable artifacts:
+
+- **GIF export**: Record N seconds of interaction → optimized GIF
+- **MP4 export**: Higher quality, with audio if signal sources include audio
+- **Frame sequence export**: PNG frames for use in documentation
+- **Interaction script export**: JSON of all events, can be replayed deterministically
+
+**Use cases**:
+- Marketing materials for the plugin
+- Documentation showing how a feature works
+- Bug reports ("here's exactly what I did")
+- Onboarding/tutorial recordings
+
+## 3.7 Brand System - The Concept
+
+For developers building multiple plugins, maintain visual consistency across the entire product line:
+
+**A "Brand" is**:
+- A named collection of stylesheets, color palettes, fonts, component preferences
+- Shared across multiple SynthSkin projects
+- Updated centrally - changes propagate to all projects using it
+
+## 3.8 Brand Manager
+
+New top-level concept in SynthSkin Studio:
+
+```
+~/SynthSkin/
+├── brands/
+│   ├── my-audio-company/
+│   │   ├── brand.json
+│   │   ├── stylesheets/
+│   │   │   ├── core.xml
+│   │   │   ├── dark-theme.xml
+│   │   │   └── light-theme.xml
+│   │   ├── fonts/
+│   │   ├── presets/
+│   │   │   ├── knob-styles.json
+│   │   │   └── meter-styles.json
+│   │   └── assets/
+│   │       └── logo.svg
+│   └── client-x/
+│       └── ...
+└── projects/
+    └── ...
+```
+
+**Brand definition (`brand.json`)**:
+```json
+{
+  "name": "My Audio Company",
+  "version": "2.1",
+  "primaryColors": {
+    "accent": "#ffaa33",
+    "panel": "#2a2825",
+    "text": "#e8e4dc"
+  },
+  "fonts": {
+    "label": "Eurostile",
+    "numeric": "JetBrains Mono",
+    "title": "Orbitron"
+  },
+  "componentDefaults": {
+    "knob": "moog-chicken-head",
+    "slider": "neve-fader",
+    "meter": "vintage-vu"
+  },
+  "lightingPreset": "warm-studio",
+  "logoPath": "assets/logo.svg"
+}
+```
+
+## 3.9 Brand Application
+
+When creating a new project:
+- Choose "Apply brand" → list of available brands
+- New project starts with all brand defaults applied
+- Brand stylesheets become the base, project can extend them
+
+When working in a project:
+- "Brand panel" shows which brand is active
+- Brand-derived properties shown with a special indicator (small brand icon)
+- Override any brand property locally if needed
+- "Pull brand updates" - if the brand was updated, apply changes to current project
+
+## 3.10 Brand Editor
+
+Edit brands centrally:
+- Open "Brand Manager" → select brand
+- Edit colors, fonts, default components, lighting
+- "Preview" button shows how a sample plugin looks with current brand
+- "Apply to all projects" - propagates changes to every project using this brand
+- Version history of brand changes
+
+## 3.11 Multi-Plugin Project View
+
+If user has multiple plugins using the same brand:
+- "Brand projects" view shows all of them
+- Thumbnails of each plugin's main panel
+- Single click to open any project
+- Quick visual consistency check across the family
+
+## 3.12 Testing Protocol for Milestone 3
+
+**Sandbox tests**:
+1. Load a design with VU meters
+2. Send a sine burst through the sandbox
+3. Verify meter ballistics match expected VU behavior visually
+4. Drag a knob with inertia enabled - verify post-release momentum
+5. Record 10 seconds of interaction → export GIF → verify file plays correctly
+6. Same recording → export MP4 with audio → verify
+
+**Brand tests**:
+1. Create a new brand "Test Audio"
+2. Define accent color, fonts, default components
+3. Create 3 projects using this brand
+4. Verify all 3 start with consistent appearance
+5. Change the brand accent color
+6. Pull updates in one of the projects → verify only that one updated
+7. Pull updates in the others → verify they all match
+
+## 3.13 Milestone 3 Completion Report
+
+Cover:
+- Did the sandbox actually catch issues you would have missed?
+- How accurately does sandbox behavior match real JUCE plugin behavior?
+- Did the brand system reduce friction or add it?
+- Workflow observations
+- Recommendation for Milestone 4
+
+**🛑 STOP HERE. Wait for user decision before proceeding.**
+
+---
+
+# MILESTONE 4: Complete Project Generator
+
+**Strategic goal**: Move beyond GUI generation. Make SynthSkin Studio capable of producing complete, working JUCE plugin projects that include parameter management, MIDI handling, preset systems, and DSP scaffolding.
+
+**Why this is fourth**: Once the GUI side is solid (Milestones 1-3), the next bottleneck is everything around the GUI - parameters, MIDI, presets, project setup. This milestone removes that bottleneck.
+
+## 4.1 Full Project Generator
+
+When the user clicks "New Plugin Project" in SynthSkin Studio, the tool should generate a complete working plugin, not just a GUI:
+
+```
+generated-plugin/
+├── CMakeLists.txt
+├── README.md
+├── .gitignore
+├── Source/
+│   ├── PluginProcessor.h
+│   ├── PluginProcessor.cpp
+│   ├── PluginEditor.h
+│   ├── PluginEditor.cpp
+│   ├── ParameterIDs.h          # All parameter IDs as constants
+│   ├── PresetManager.h
+│   ├── PresetManager.cpp
+│   ├── DSP/
+│   │   ├── DSPEngine.h         # Main DSP class
+│   │   ├── DSPEngine.cpp
+│   │   └── modules/            # Optional pre-built DSP modules
+│   └── GUI/
+│       └── (loaded from BinaryData)
+├── Resources/
+│   ├── design.xml              # SynthSkin design
+│   ├── stylesheet.xml
+│   ├── presets/
+│   │   ├── factory/
+│   │   └── user/
+│   └── images/
+├── Tests/
+│   ├── PluginValidatorTests.cpp
+│   └── ParameterTests.cpp
+└── Builds/
+    └── (generated by CMake)
+```
+
+## 4.2 Parameter Layout Generator
+
+Based on bindings defined in SynthSkin Studio, generate the complete APVTS parameter layout:
+
+```cpp
+// ParameterIDs.h (auto-generated)
+namespace ParamID {
+    static const juce::String osc1Pitch = "osc1Pitch";
+    static const juce::String osc1Wave = "osc1Wave";
+    static const juce::String filterCutoff = "filterCutoff";
+    // ... all parameters
+}
+
+// PluginProcessor.cpp (auto-generated section)
+juce::AudioProcessorValueTreeState::ParameterLayout 
+MySynth::createParameterLayout() {
+    return {
+        std::make_unique<juce::AudioParameterFloat>(
+            ParamID::osc1Pitch, "Osc 1 Pitch",
+            juce::NormalisableRange<float>(-24.0f, 24.0f, 0.01f), 0.0f,
+            "semi"),
+        std::make_unique<juce::AudioParameterChoice>(
+            ParamID::osc1Wave, "Osc 1 Wave",
+            juce::StringArray{"Saw", "Square", "Triangle", "Sine"}, 0),
+        // ... all parameters
+    };
+}
+```
+
+The generator handles all parameter types: float, int, choice, bool, with proper ranges, units, defaults, and skew factors from the SynthSkin design.
+
+## 4.3 MIDI Learn System
+
+Every parameter automatically gets MIDI learn capability:
+
+**Generated code**:
+```cpp
+class MidiLearnManager {
+public:
+    void startLearning(const juce::String& parameterId);
+    void stopLearning();
+    void processMidi(const juce::MidiMessage& msg);
+    void saveMappings(juce::ValueTree& state);
+    void loadMappings(const juce::ValueTree& state);
+};
+```
+
+**In SynthSkin Studio**:
+- Component property: "MIDI Learnable" toggle
+- "MIDI Learn Mode" in the generated plugin
+- Right-click any control → "Learn MIDI CC"
+- Mappings persisted with the plugin state
+- Visual indicator on controls that have a MIDI mapping
+
+## 4.4 Preset System
+
+Complete preset management generated automatically:
+
+**Features**:
+- Load/save user presets
+- Factory preset bank (define in SynthSkin Studio)
+- Preset categories (Bass, Lead, Pad, FX, etc.)
+- A/B comparison
+- Preset browser UI (auto-generated from configurable template)
+- Import/export preset files
+- Preset morphing (interpolate between two presets)
+
+**Generated code**:
+```cpp
+class PresetManager {
+public:
+    void savePreset(const juce::String& name, const juce::String& category);
+    void loadPreset(const juce::String& path);
+    void loadFactoryPreset(int index);
+    juce::StringArray getCategories() const;
+    juce::StringArray getPresetsInCategory(const juce::String& category) const;
+    
+    void enableABComparison();
+    void copyAToB();
+    void swapAB();
+};
+```
+
+**In SynthSkin Studio**:
+- "Preset Manager" workspace tab
+- Define factory preset bank
+- Configure preset browser UI from templates
+- Import existing presets to bake into the bank
+
+## 4.5 DSP Module Library
+
+Pre-built DSP modules that can be dropped into a project:
+
+```
+src/dsp-library/
+├── filters/
+│   ├── ladder-filter/         # Moog-style 4-pole
+│   ├── state-variable-filter/
+│   ├── biquad-filter/
+│   └── comb-filter/
+├── delays/
+│   ├── basic-delay/
+│   ├── tape-delay/            # With wow, flutter, saturation
+│   └── multi-tap-delay/
+├── reverbs/
+│   ├── plate-reverb/
+│   ├── room-reverb/
+│   └── shimmer-reverb/
+├── modulation/
+│   ├── chorus/
+│   ├── flanger/
+│   ├── phaser/
+│   └── tremolo/
+├── distortion/
+│   ├── soft-clip/
+│   ├── tube-saturation/
+│   ├── waveshaper/
+│   └── bitcrusher/
+├── dynamics/
+│   ├── compressor/
+│   ├── limiter/
+│   ├── gate/
+│   └── expander/
+└── synthesis/
+    ├── analog-oscillator/     # Anti-aliased VA oscillator
+    ├── wavetable-oscillator/
+    ├── fm-oscillator/
+    ├── adsr-envelope/
+    ├── lfo/
+    └── filter-envelope/
+```
+
+Each module:
+- Self-contained C++ class
+- Has its own parameter definitions
+- Has documentation
+- Has a SynthSkin "preset section" - drop it on a panel and the corresponding controls auto-bind
+- Royalty-free, MIT licensed (or similar) for inclusion in commercial plugins
+
+**Important note**: These are not meant to compete with handwritten DSP. They're starting points for prototyping and educational use. Document this clearly so users don't expect production-grade audio quality from generic implementations.
+
+## 4.6 DSP Module Drop-In Workflow
+
+In the SynthSkin Studio panel designer:
+
+- Library panel has a "DSP Modules" section
+- Drag a module (e.g., "Ladder Filter") onto the canvas
+- A pre-designed group of controls appears (cutoff, resonance, drive, etc.)
+- All controls are pre-bound to the module's parameters
+- The module's C++ code gets added to the generated project automatically
+- Module instances can be wired together (in a future visual graph editor, not this milestone)
+
+## 4.7 CMake Project Generator
+
+Generate a complete, working `CMakeLists.txt` for any project:
+
+```cmake
+# Auto-generated by SynthSkin Studio
+cmake_minimum_required(VERSION 3.22)
+project(MySynthPlugin VERSION 1.0.0)
+
+# Configure JUCE
+add_subdirectory(JUCE)
+
+juce_add_plugin(MySynthPlugin
+    COMPANY_NAME "${COMPANY}"
+    BUNDLE_ID "${BUNDLE_ID}"
+    PLUGIN_MANUFACTURER_CODE "${MFR_CODE}"
+    PLUGIN_CODE "${PLUGIN_CODE}"
+    FORMATS VST3 AU Standalone
+    PRODUCT_NAME "MySynthPlugin"
+    IS_SYNTH TRUE
+    NEEDS_MIDI_INPUT TRUE
+)
+
+target_sources(MySynthPlugin PRIVATE
+    Source/PluginProcessor.cpp
+    Source/PluginEditor.cpp
+    Source/PresetManager.cpp
+    Source/DSP/DSPEngine.cpp
+    # ... all sources
+)
+
+target_compile_definitions(MySynthPlugin PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_VST3_CAN_REPLACE_VST2=0
+)
+
+target_link_libraries(MySynthPlugin PRIVATE
+    juce::juce_audio_utils
+    juce::juce_dsp
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_lto_flags
+    juce::juce_recommended_warning_flags
+)
+
+juce_add_binary_data(MySynthPluginData SOURCES
+    Resources/design.xml
+    Resources/stylesheet.xml
+    # ... all binary data
+)
+```
+
+User-configurable in SynthSkin Studio: project name, company, bundle ID, formats to build, plugin codes.
+
+## 4.8 Build Configuration UI
+
+In SynthSkin Studio, new "Build" panel:
+
+- Output formats: VST3 / AU / AAX / Standalone (checkboxes)
+- Architecture: x64 / ARM64 / Universal (Mac)
+- Configuration: Debug / Release / RelWithDebInfo
+- Code signing: Mac developer ID, Windows certificate
+- Optimization: O0 / O2 / O3 / Os
+- "Build" button - runs CMake and the build system
+- Build log streamed to a console panel
+- On success: links to the built plugins
+
+## 4.9 Plugin Validator Integration
+
+Integrate Pluginval (industry-standard JUCE plugin validator):
+
+- After building, automatically run pluginval against the output
+- Report results in the build console
+- Common issues highlighted with suggested fixes
+- Test categories: parameter behavior, automation, state save/restore, MIDI handling, multi-instance safety
+- Pass/fail badge for the project
+
+## 4.10 Testing Protocol for Milestone 4
+
+End-to-end test:
+1. Open SynthSkin Studio
+2. New Plugin Project → "Synthesizer" template
+3. Design a panel with: 2 oscillators, filter, ADSR, LFO, master
+4. Add DSP modules: Analog Oscillator, Ladder Filter, ADSR Envelope, LFO
+5. Bind all controls to parameters automatically
+6. Define 5 factory presets
+7. Build VST3 + AU
+8. Pluginval passes
+9. Load in REAPER
+10. Plays sound, parameters work, presets switch correctly
+11. MIDI learn works
+12. State save/restore works between sessions
+
+If all of this passes, you've built a tool that generates working plugins from a visual design. This is a significant achievement.
+
+## 4.11 Milestone 4 Completion Report
+
+Cover:
+- Code quality of generated projects vs handwritten
+- DSP module quality assessment
+- How does Pluginval rate the generated plugins?
+- Where does the user still need to write code manually?
+- Recommendation for Milestone 5
+
+**🛑 STOP HERE. Wait for user decision before proceeding.**
+
+---
+
+# MILESTONE 5: Visual Quality Upgrade
+
+**Strategic goal**: Make plugins built with SynthSkin Studio look as good as commercial plugins from Arturia, u-he, Universal Audio. This is the milestone where the visual quality leaps from "very good" to "indistinguishable from professional."
+
+**Why fifth**: At this point all the workflow is solid. Now we polish the actual visual output to commercial quality.
+
+## 5.1 PBR Material System Upgrade
+
+Replace the current shader system with a proper physically-based rendering pipeline:
+
+**Architecture**:
+```
+src/rendering/pbr/
+├── PBRMaterial.ts            # Material definition
+├── BRDF/
+│   ├── CookTorrance.ts       # Microfacet BRDF
+│   ├── Disney.ts             # Disney's principled BRDF
+│   └── Anisotropic.ts        # For brushed metals
+├── lighting/
+│   ├── IBL.ts                # Image-based lighting
+│   ├── HDRILoader.ts         # HDR environment maps
+│   └── PrefilterEnvMap.ts    # Pre-convolved env maps
+├── shaders/
+│   ├── pbr.vert
+│   ├── pbr.frag              # Main PBR fragment shader
+│   └── chunks/
+│       ├── lighting.glsl
+│       ├── brdf.glsl
+│       ├── tonemap.glsl
+│       └── gamma.glsl
+└── textures/
+    ├── BRDFLUT.ts            # Pre-computed BRDF lookup
+    └── HDRIs/
+        ├── studio.hdr
+        ├── warm-room.hdr
+        └── dark-rack.hdr
+```
+
+**Material parameters** (Disney principled BRDF):
+- Base color (albedo)
+- Metallic (0-1)
+- Roughness (0-1)
+- Specular (0-1, for non-metals)
+- Specular tint
+- Anisotropic (for brushed metals)
+- Anisotropic rotation
+- Sheen (for fabric-like materials)
+- Clearcoat
+- Clearcoat roughness
+- Subsurface (for plastic, wax, leather)
+- Subsurface color
+- IOR (index of refraction)
+- Normal map intensity
+- Emission color
+- Emission intensity (for LEDs)
+
+## 5.2 HDRI Environment System
+
+Real environment maps for realistic reflections:
+
+**Bundled HDRIs**:
+- Studio (neutral, soft)
+- Warm room (incandescent lighting)
+- Dark rack (low light, mostly direct)
+- Window light (single strong source)
+- Sunset (dramatic warm)
+- Cold lab (clinical, blue-white)
+
+**HDRI controls**:
+- Rotation (azimuth)
+- Intensity multiplier
+- Tint color
+- Blur amount (for softer reflections)
+
+**Pre-processing**:
+- HDRIs are pre-convolved at load time for diffuse irradiance
+- Pre-filtered specular maps at multiple roughness levels
+- BRDF integration LUT computed once
+
+## 5.3 Material Library Expansion
+
+Comprehensive professional material library:
+
+**Metals**:
+- Brushed aluminum (multiple grain directions)
+- Polished aluminum
+- Anodized black aluminum
+- Brushed stainless steel
+- Polished chrome
+- Copper (new and patinated)
+- Brass (new and aged)
+- Gold-plated
+- Powder-coated metal (multiple colors)
+- Hammertone finish
+
+**Plastics**:
+- Glossy black ABS
+- Matte black ABS
+- White polycarbonate
+- Translucent colored plastics (red, green, blue, amber)
+- Bakelite (vintage brown)
+- Vintage cream
+- Pebbled texture plastic
+
+**Woods**:
+- Walnut
+- Oak
+- Mahogany
+- Rosewood
+- Teak
+- Maple
+- Ebony
+
+**Special**:
+- Leather (smooth, pebbled, aged)
+- Carbon fiber (3K weave, 12K weave)
+- Vinyl
+- Painted metal with subtle imperfections
+- Cast iron
+- Glass (clear, frosted, tinted)
+
+Each material is calibrated to match real-world reference photos. They should look indistinguishable from a high-resolution photo of the actual material.
+
+## 5.4 Vintage Wear Simulator
+
+The killer feature for vintage-style plugins:
+
+```
+src/rendering/wear/
+├── WearSimulator.ts          # Main coordinator
+├── effects/
+│   ├── ScratchGenerator.ts
+│   ├── PaintWearEffect.ts
+│   ├── PatinaEffect.ts
+│   ├── DustAccumulation.ts
+│   ├── FingerprintMarks.ts
+│   ├── SunFading.ts
+│   └── EdgeWear.ts
+└── presets/
+    ├── pristine.json         # 0 years
+    ├── light-use.json        # 2 years
+    ├── well-loved.json       # 10 years
+    ├── vintage.json          # 30 years
+    └── well-worn.json        # 50+ years
+```
+
+**Wear effect parameters**:
+- Age (0-50+ years)
+- Use intensity (light, medium, heavy)
+- Environment (clean studio, smoky club, dusty attic)
+- Material-specific reactions (metal patinas differently than plastic)
+
+**Smart wear distribution**:
+- Wear accumulates around interactive controls (knobs that get used)
+- Edges and corners show more wear than centers
+- Painted labels fade with sun exposure direction
+- Dust collects in recessed areas
+- Fingerprints appear near commonly-touched controls
+
+**User controls**:
+- Per-component wear override
+- "Polish" tool to remove wear from specific areas
+- Random seed for variation
+
+## 5.5 Light Bleed and Bloom Effects
+
+Subtle effects that separate good from great:
+
+**LED bloom**:
+- Bright LEDs create soft halos around themselves
+- Halo color matches LED color
+- Halo intensity follows LED brightness
+- Color bleeds slightly into nearby surfaces
+- Implements proper HDR bloom with pre-filter, downsample, upsample, composite
+
+**Backlit displays**:
+- LCD/OLED backlight bleeds slightly outside the screen frame
+- Color temperature affects nearby surfaces
+- Subtle illumination of screws and bezels near the screen
+
+**Phosphor persistence (CRT mode)**:
+- Bright pixels fade slowly, not instantly
+- Realistic CRT scanlines
+- Slight barrel distortion at edges
+- Color separation at high contrast edges
+
+**Tube glow (vacuum tubes)**:
+- Realistic warmup curve
+- Orange/amber glow that pulses subtly
+- Heat distortion above the tube (subtle)
+
+## 5.6 Subpixel-Accurate Rendering
+
+Plugins need to look crisp at every scale:
+
+- Sub-pixel positioning support throughout
+- Pixel snapping where appropriate (text, sharp edges)
+- Anti-aliased edges everywhere
+- Multi-sample supersampling for high-quality renders
+- Bilinear / bicubic / Lanczos filtering options for textures
+
+**Scale-aware rendering**:
+- Detect target DPI
+- Adjust line widths to maintain visual consistency
+- Snap text baselines to pixel grid
+- Adjust shadow offsets to remain crisp
+
+## 5.7 SVG-First Pipeline
+
+Where possible, render components from vectors instead of bitmaps:
+
+**Conversion logic**:
+- Foundry-generated knobs can be exported as SVG when materials allow
+- SVG rendering at runtime in JUCE (via JUCE's path support)
+- Fall back to bitmap when material complexity requires it
+- Hybrid: SVG base + bitmap details overlay
+
+**Benefits**:
+- Resolution independent (perfect at any DPI)
+- Smaller binary data
+- Faster runtime rendering
+- Easier theme variations (color changes don't require re-baking)
+
+## 5.8 Custom Font Embedding System
+
+Professional font management:
+
+**Bundled font library** (verify all licenses for commercial use):
+- Eurostile family
+- DIN family
+- Inter Tight
+- JetBrains Mono
+- Orbitron
+- Bank Gothic
+- Industry
+- Futura PT (if licensable)
+
+**Font UI**:
+- Font picker shows commercial-use status
+- Warning for fonts with restrictive licenses
+- Automatic embedding in BinaryData
+- License attribution generated automatically for the plugin's About box
+
+## 5.9 Texture Atlas Optimization
+
+Efficient packing of all bitmap assets:
+
+- All bitmaps in a project automatically packed into atlases
+- Power-of-2 sizes for GPU efficiency
+- Automatic mipmap generation
+- Compression (ASTC where supported, BC7 fallback)
+- Metadata in JSON for runtime lookup
+- Reduces memory footprint by 30-50% typically
+
+## 5.10 Render Quality Settings
+
+Allow users to balance quality vs performance:
+
+**Quality presets**:
+- **Draft**: Fast preview, lower quality (for working in Studio)
+- **Standard**: Production quality (default for export)
+- **High**: Maximum quality (final renders)
+- **Ultra**: 4x supersampling, full PBR (for marketing renders)
+
+Each preset adjusts: shadow resolution, AO samples, reflection quality, AA samples, texture filtering.
+
+## 5.11 Testing Protocol for Milestone 5
+
+Visual comparison test:
+1. Take a screenshot of a popular commercial plugin (Arturia, u-he, etc.)
+2. Recreate the same panel design in SynthSkin Studio
+3. Render at the same resolution
+4. Side-by-side visual comparison
+5. Goal: An audio professional should not be able to tell which is the real plugin and which was generated
+
+Material accuracy test:
+1. Find reference photo of brushed aluminum
+2. Render a knob with brushed aluminum material in SynthSkin
+3. Compare specular response, color, grain pattern
+4. Adjust material parameters until match is convincing
+
+## 5.12 Milestone 5 Completion Report
+
+Cover:
+- Visual quality assessment (with screenshots) vs commercial plugins
+- Performance impact of new rendering pipeline
+- Memory usage of new materials
+- Did vintage wear feel authentic?
+- Recommendation for Milestone 6
+
+**🛑 STOP HERE. Wait for user decision before proceeding.**
+
+---
+
+# MILESTONE 6: Distribution & Marketplace Foundation
+
+**Strategic goal**: Position SynthSkin Studio as a platform, not just a tool. Enable distribution of plugin assets, components, and templates - eventually as a marketplace.
+
+**Why last**: This only makes sense once everything else is solid. A marketplace with 5 buyers and 0 quality plugins is worse than no marketplace.
+
+## 6.1 Component Pack Format
+
+Define a portable format for sharing components:
+
+```
+my-component-pack.synthpack
+├── manifest.json
+├── components/
+│   ├── knobs/
+│   ├── sliders/
+│   ├── meters/
+│   └── ...
+├── stylesheets/
+├── presets/
+├── thumbnails/
+└── README.md
+```
+
+**Manifest structure**:
+```json
+{
+  "name": "Vintage Moog Components",
+  "author": "David Cohen",
+  "version": "1.0.0",
+  "license": "MIT",
+  "price": 0,
+  "description": "...",
+  "tags": ["vintage", "moog", "knobs"],
+  "preview": "thumbnails/preview.png",
+  "components": [
+    {
+      "id": "moog-chicken-head-large",
+      "name": "Chicken Head Large",
+      "category": "knobs",
+      "thumbnail": "thumbnails/chicken-large.png"
+    }
+  ]
+}
+```
+
+## 6.2 Pack Browser
+
+In SynthSkin Studio, new "Marketplace" workspace:
+
+- Browse installed packs
+- Search/filter local packs
+- Apply packs to current project
+- Manage updates
+- Initially: install from local files only
+- Future: connect to remote repository
+
+## 6.3 Pack Creator Tool
+
+Help users create their own packs:
+
+- "Create Pack" wizard
+- Select components from library
+- Auto-generate thumbnails
+- Edit manifest metadata
+- Validate pack structure
+- Export as `.synthpack` file
+- Share via any file-sharing method
+
+## 6.4 Plugin Marketing Asset Generator
+
+Once a plugin is designed, generate everything needed to market it:
+
+**Auto-generated marketing assets**:
+- Hero shot (front view, perfect lighting)
+- Three-quarter view (3D-rendered "product photo")
+- Detail shots (zoomed sections)
+- Animated GIFs of key interactions
+- Mock screenshots in popular DAWs
+- Print-ready PDF spec sheet
+
+**Templates for marketplaces**:
+- KVR Audio submission package (correct image dimensions, formats)
+- Plugin Boutique submission package
+- VST.com submission package
+- Generic web/social media package
+
+## 6.5 Hardware Photo Renders
+
+Make plugins look like physical hardware in marketing materials:
+
+- "Render as hardware" mode
+- Composites the plugin onto realistic hardware shells
+- Studio lighting setup with HDRIs
+- Multiple camera angles
+- Background scenes (studio, desk, rack)
+- Outputs at 4K resolution
+- Realistic shadows, reflections, depth of field
+
+## 6.6 Project Templates
+
+Curated starting templates for common plugin types:
+
+**Templates**:
+- Subtractive synthesizer (oscillators + filter + envelope)
+- FM synthesizer (operators + algorithms)
+- Wavetable synthesizer
+- Sampler / sample playback
+- Multi-effect (delay + reverb + chorus)
+- EQ (parametric, graphic, dynamic)
+- Compressor / limiter
+- Distortion / saturation
+- Modulation effects (chorus, phaser, flanger)
+- Utility (gain, pan, M/S)
+
+Each template includes:
+- Pre-designed panel
+- DSP module bindings
+- Factory presets
+- Documentation
+
+## 6.7 Brand Showcase Page Generator
+
+Generate a website-ready showcase for plugin developers:
+
+- Static HTML page showing all plugins in a brand
+- Beautiful, responsive design
+- Audio demos (if provided)
+- Download links
+- Branded with the developer's identity
+- Deploys to any static host (GitHub Pages, Netlify, etc.)
+
+## 6.8 Update System
+
+Lightweight update mechanism:
+- Check for SynthSkin Studio updates on startup (opt-in)
+- Check for pack updates
+- Show changelog before installing
+- Roll back if update breaks something
+
+## 6.9 Telemetry (Optional, Privacy-Respecting)
+
+If user opts in:
+- Anonymous usage statistics (which features used)
+- Error reports (no personal data)
+- Helps prioritize future development
+- Easy to disable, off by default
+- Local-first, sends only summary data
+
+## 6.10 Documentation & Tutorial System
+
+Built-in learning materials:
+- Interactive tutorials for new users
+- Video walkthroughs (loaded from YouTube/Vimeo)
+- Searchable documentation
+- Tooltips with examples
+- "Sample projects" library
+- Community link to forum/Discord
+
+## 6.11 Testing Protocol for Milestone 6
+
+1. Create a component pack from existing library
+2. Install on a "fresh" SynthSkin instance (different machine or cleaned profile)
+3. Verify all components load correctly
+4. Apply pack to a project
+5. Create marketing assets for a finished plugin
+6. Verify all generated assets meet KVR/Plugin Boutique specs
+7. Generate a brand showcase page
+8. Open in a browser, verify it looks correct
+
+## 6.12 Milestone 6 Completion Report
+
+Final completion report covering the entire roadmap:
+- What worked exceptionally well
+- What turned out to be unnecessary
+- What's missing that you didn't anticipate
+- Honest assessment of competitive position vs PluginGuiMagic, HISE, etc.
+- Recommendations for ongoing maintenance and future development
+
+**🛑 STOP HERE. The roadmap is complete.**
+
+---
+
+## Universal Working Protocols
+
+### Visual Design Standards
+
+<frontend_aesthetics>
+Every UI addition in this roadmap must match the existing professional aesthetic of SynthSkin Studio. Reference the prior UX overhaul document for the complete design system. Key principles:
+- Dark theme with warm undertones, amber accent
+- Inter Tight for UI, JetBrains Mono for numerics, Orbitron for headings
+- High information density, no wasted whitespace
+- Custom SVG icons with 1.5px strokes
+- Subtle micro-interactions, no bouncy springs
+- All transitions max 200ms
+- Professional pro audio tool aesthetic, never web app aesthetic
+</frontend_aesthetics>
+
+### Session Workflow
+
+Every working session:
+1. `pwd` to confirm directory
+2. Read `roadmap-progress.md` for current state
+3. Read `decisions.md` for context
+4. Identify the smallest meaningful next increment
+5. Implement that increment
+6. Test it
+7. Commit
+8. Update progress file
+9. Repeat or stop cleanly
+
+### Between Milestones
+
+After completing each milestone:
+1. Write the completion report (honest assessment)
+2. Tag the git commit with `milestone-N-complete`
+3. Update `roadmap-progress.md` with the report summary
+4. **Stop and wait for user review**
+5. Do not start the next milestone until explicitly approved
+
+### Honest Self-Assessment
+
+If at any point during a milestone you discover that:
+- A planned feature is much harder than estimated
+- A feature isn't actually useful in practice
+- A different approach would be better
+- The current architecture doesn't support what's needed cleanly
+
+**Stop and report immediately.** Do not push through with a bad plan. The user prefers honest mid-course corrections over silent compromises.
+
+### Scope Discipline
+
+This roadmap is already large. Resist the urge to expand it. If you find yourself thinking "while I'm here, I should also add X" - don't. Add it to a "future ideas" file and stay focused on the current milestone's defined scope.
+
+---
+
+## First Task
+
+1. Run `pwd` to confirm working directory
+2. Read `roadmap-progress.md` and `decisions.md` if they exist
+3. Verify the baseline SynthSkin Studio is in place with all expected features (extraction, foundry, lighting, panel designer, animation, JUCE export, workspace UX)
+4. If any baseline feature is missing, stop and report - the baseline must be complete before this roadmap begins
+5. If baseline is complete, create or update `roadmap-progress.md` with the milestone structure and mark Milestone 1 as "in progress"
+6. Begin Milestone 1.1: design the bridge module structure
+7. Implement the simplest possible bridge: just a TCP server that can receive a connection and echo back
+8. Verify it works with a simple test client
+9. Commit
+10. Stop and report before continuing
+
+Do not skip ahead. Do not chain milestones. Each step is a deliberate decision point.
+
+---
+
+זה הפרומפט. לפני שאתה לוקח אותו לקלוד קוד, יש כמה דברים חשובים שאתה חייב להבין:
+
+## 🎯 איך להשתמש בפרומפט הזה נכון
+
+**הפרומפט הזה הוא חוזה.** הוא מבוסס על העיקרון שאחרי כל milestone אתה **עוצר באמת**, משתמש בכלי, ומחליט אם להמשיך. אם אתה לא מתכוון לכבד את העצירות האלה, הפרומפט לא יעזור לך.
+
+**למה זה קריטי**: אחרי Milestone 1 תקבל live JUCE bridge שעובד. זה כבר יותר ממה שיש להרבה מפתחי VST. אתה אולי תגלה שזה מספיק לך לשנה, ואתה רוצה לעצור ולבנות סינתים בפועל. זה תוצאה **מצוינת**, לא כישלון. אל תרגיש שאתה חייב להמשיך לכל ששת הmilestones.
+
+## 📋 מה לעשות כשמגיעים לעצירה
+
+אחרי כל milestone, שאל את עצמך 3 שאלות:
+
+1. **האם אני באמת משתמש בכלי בפועל?** אם בנית את Milestone 1 ועוד לא יצרת איתו פאנל אמיתי לסינת ה-VST שלך - אל תתחיל את Milestone 2. תשתמש בכלי קודם.
+
+2. **מה הכי מפריע לי כרגע בעבודה האמיתית?** התשובה הזו צריכה להכתיב את הmilestone הבא, גם אם זה אומר לדלג על אחד מהשלבים בפרומפט.
+
+3. **האם יש משהו אחר שיתן לי יותר ערך?** למשל - אולי אחרי Milestone 1, התשובה היא "לעבוד שלושה חודשים על HyperSynth ולחזור לכאן בעוד רבעון". זה גם תקף.
+
+## 🚨 הסכנה הגדולה
+
+קלוד קוד יכול לפתות אותך לחבר milestones ביחד. אתה תראה תוצאות יפות, תרגיש זרימה, ותגיד "בוא נמשיך מיד ל-2". אל תעשה את זה. **כל עצירה היא הזדמנות אמיתית לבחור משהו אחר**, ואם תוותר עליה, הסקופ יתפח שוב לתוכנית של 18 חודשים.
+
+## 💡 ההמלצה האישית שלי
+
+אם אתה עושה רק milestone אחד מהפרומפט הזה, תעשה את **Milestone 1**. הוא לבדו ייתן לך את הפיצ'ר היחיד ש-PluginGuiMagic יש להם ושאתה אין לך, וזה יחסיט אותך מ"כלי חמוד שיצרתי" ל"כלי שאני באמת משתמש בו לפיתוח VST שלי".
+
+אם אתה עושה שניים, תוסיף **Milestone 4** (Project Generator) - הוא הכי שווה אחרי 1, כי הוא חוסך לך ימי עבודה בכל פלאגין חדש שאתה בונה.
+
+3 ומעלה? תעצור ותשאל את עצמך כנות אם זה באמת התרגום הכי טוב של הזמן שלך.
+
+בהצלחה - והכי חשוב, **תשתמש בכלי בין שלב לשלב, לא רק תבנה אותו**.

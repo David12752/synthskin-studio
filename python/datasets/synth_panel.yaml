@@ -1,0 +1,30 @@
+# SynthSkin panel-control detector dataset
+#
+# Expected YOLO layout:
+#   datasets/synth_panel/
+#     images/train/*.png|jpg
+#     images/val/*.png|jpg
+#     labels/train/*.txt
+#     labels/val/*.txt
+#
+# Labels use YOLO bbox format:
+#   class_id x_center y_center width height
+# where coordinates are normalized 0..1.
+path: ./datasets/synth_panel
+train: images/train
+val: images/val
+
+auto_download: false
+
+names:
+  0: knob
+  1: slider_cap
+  2: slider_track
+  3: led_light
+  4: led_screen
+  5: meter_needle
+  6: meter_range
+  7: meter_screen
+  8: text
+  9: button
+  10: switch
